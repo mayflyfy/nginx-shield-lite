@@ -1,6 +1,6 @@
 # Nginx Shield Lite
 
-一款无任何依赖的单py文件Nginx日志分析 & IP黑名单管理Web应用程序。
+零依赖单 Python 文件 Web 应用，集成 Nginx 日志分析、爬虫识别、IP 黑名单管理功能。
 
 ![截图](preview.jpg)
 
