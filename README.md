@@ -96,3 +96,7 @@ Nginx access.log
 ## 许可证
 
 MIT
+
+## 致谢
+
+本项目来源于[曼波资源站](https://manbohub.com)
