@@ -111,4 +111,4 @@ MIT
 
 ## 致谢
 
-本项目来源于[曼波资源站](https://manbohub.com)
+本项目来源于[曼波资源站](https://manbohub.com/archives/4048)
