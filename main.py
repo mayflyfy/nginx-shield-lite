@@ -98,8 +98,8 @@ function renderBot(data){
     document.getElementById('bot_stats').innerHTML=h;
 }
 
-function getCookie(k){const m=document.cookie.match(new RegExp('(?:^|;)\\s*'+k+'=([^;]*)'));return m?decodeURIComponent(m[1]):null}
-function setCookie(k,v){document.cookie=k+'='+encodeURIComponent(v)+';path=/;max-age=31536000'}
+function load(k){return localStorage.getItem('nsl_'+k)}
+function save(k,v){localStorage.setItem('nsl_'+k,v)}
 
 function ipSortKey(ip){return ip.split('/')[0].split('.').map(n=>n.padStart(3,'0')).join('')}
 
@@ -185,7 +185,7 @@ function loadStats(){
 function adjMin(delta){
     const el=document.getElementById('ip_min');
     el.value=Math.max(0,(parseInt(el.value)||0)+delta);
-    setCookie('ip_min',el.value);renderIP(allIPs);
+    save('ip_min',el.value);renderIP(allIPs);
 }
 
 function addBL(ip){
@@ -215,29 +215,29 @@ function addBLCIDR(ip,bits){
 }
 
 document.getElementById('ip_min').addEventListener('change',function(){
-    setCookie('ip_min',this.value);renderIP(allIPs);
+    save('ip_min',this.value);renderIP(allIPs);
 });
 document.getElementById('sort_count').addEventListener('change',function(){
-    setCookie('ip_sort','count');renderIP(allIPs);
+    save('ip_sort','count');renderIP(allIPs);
 });
 document.getElementById('sort_ip').addEventListener('change',function(){
-    setCookie('ip_sort','ip');renderIP(allIPs);
+    save('ip_sort','ip');renderIP(allIPs);
 });
 document.getElementById('today_only').addEventListener('change',function(){
-    setCookie('today_only',this.checked?'1':'0');loadStats();
+    save('today_only',this.checked?'1':'0');loadStats();
 });
 document.getElementById('success_only').addEventListener('change',function(){
-    setCookie('success_only',this.checked?'1':'0');loadStats();
+    save('success_only',this.checked?'1':'0');loadStats();
 });
 document.getElementById('unblocked_only').addEventListener('change',function(){
-    setCookie('unblocked_only',this.checked?'1':'0');renderIP(allIPs);
+    save('unblocked_only',this.checked?'1':'0');renderIP(allIPs);
 });
 (function(){
-    const v=getCookie('ip_min');if(v)document.getElementById('ip_min').value=v;
-    const so=getCookie('ip_sort');if(so==='ip'){document.getElementById('sort_ip').checked=true}
-    const t=getCookie('today_only');if(t==='1')document.getElementById('today_only').checked=true;
-    const s=getCookie('success_only');if(s==='1')document.getElementById('success_only').checked=true;
-    const u=getCookie('unblocked_only');if(u==='1')document.getElementById('unblocked_only').checked=true;
+    const v=load('ip_min');if(v)document.getElementById('ip_min').value=v;
+    const so=load('ip_sort');if(so==='ip'){document.getElementById('sort_ip').checked=true}
+    const t=load('today_only');if(t==='1')document.getElementById('today_only').checked=true;
+    const s=load('success_only');if(s==='1')document.getElementById('success_only').checked=true;
+    const u=load('unblocked_only');if(u==='1')document.getElementById('unblocked_only').checked=true;
 })();
 
 function loadBlacklist(){

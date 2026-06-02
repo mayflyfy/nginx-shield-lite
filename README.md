@@ -1,6 +1,6 @@
 # Nginx Shield Lite
 
-零依赖单 Python 文件 Web 应用，集成 Nginx 日志分析、爬虫识别、IP 黑名单管理功能。
+零依赖单 Python 极简 Web 应用，集成 Nginx 日志分析、爬虫识别、IP 黑名单管理功能。
 
 ![截图](preview.jpg)
 
@@ -21,7 +21,7 @@
 
 ### 1. 配置 Nginx
 
-在 `nginx.conf` 的 `http` 块中添加 geo 规则：
+在 `nginx.conf` 的 `http` 块中添加 geo 规则（nginx自带geo，无需安装插件）：
 
 ```nginx
 http {
