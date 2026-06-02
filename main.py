@@ -26,10 +26,12 @@ HTML = """<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>Nginx日志分析</title>
+<title>nginx-shield-lite</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:monospace;background:#fff;color:#333;padding:16px;font-size:13px}
+.brand{font-size:17px;font-weight:bold;color:#222;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #222;display:flex;align-items:center;gap:8px}
+.brand span{font-size:11px;color:#888;font-weight:normal}
 h2{font-size:15px;margin:0 0 8px;padding-bottom:4px;border-bottom:1px solid #ddd}
 .row{display:flex;gap:16px}
 .col{flex:1;min-width:0}
@@ -37,11 +39,17 @@ table{border-collapse:collapse;width:100%;margin-bottom:8px}
 th,td{border:1px solid #ddd;padding:4px 8px;text-align:left}
 th{background:#f5f5f5}
 tr:nth-child(even){background:#fafafa}
-input[type=number]{width:50px;padding:2px 4px;font-family:monospace;font-size:13px}
+input[type=number]{width:42px;padding:2px 4px;font-family:monospace;font-size:13px;text-align:center}
 .btn{background:#fff;border:1px solid #999;padding:4px 14px;cursor:pointer;font-family:monospace;font-size:13px}
 .btn:hover{background:#eee}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .btn-sm{padding:2px 8px;font-size:12px}
+.btn-adj{padding:2px 6px;font-size:14px;font-weight:bold;line-height:1}
+.btn-block{padding:2px 5px;font-size:11px;margin:0 1px;border-radius:3px}
+.ip-blocked{color:red;font-weight:bold}
+.tip{display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;font-size:11px;border:1px solid #999;border-radius:50%;cursor:help;color:#666;margin-left:4px;vertical-align:middle;position:relative}
+.tip:hover .tip-text{display:block}
+.tip-text{display:none;position:absolute;left:0;top:18px;background:#333;color:#fff;padding:8px 10px;border-radius:4px;font-size:11px;line-height:1.6;white-space:nowrap;z-index:9}
 textarea{width:100%;height:260px;border:1px solid #ddd;padding:6px;font-family:monospace;font-size:12px;resize:vertical}
 #msg{margin:4px 0;font-size:12px}
 #cmd_msg{margin:6px 0;font-size:12px;white-space:pre-wrap}
@@ -50,12 +58,13 @@ label{font-size:12px;font-weight:normal;margin-left:8px}
 </style>
 </head>
 <body>
+<div class="brand">nginx-shield-lite <span>轻量级 Nginx 日志分析 &amp; IP 黑名单管理</span></div>
 <div class="row">
 <div class="col">
 <h2>爬虫访问统计 <label><input id="today_only" type="checkbox"> 只看当天</label><label><input id="success_only" type="checkbox"> 只看成功请求</label></h2>
 <div id="bot_stats" class="loading">加载中...</div>
 <h2 style="margin-top:12px">IP访问次数明细（去重）</h2>
-<div style="margin-bottom:6px">只看访问次数 ≥ <input id="ip_min" type="number" min="0" value="5"> 的IP　排序：<label><input id="sort_count" name="ip_sort" type="radio" checked> 访问量</label><label><input id="sort_ip" name="ip_sort" type="radio"> IP地址</label></div>
+<div style="margin-bottom:6px">只看访问次数 ≥ <button class="btn btn-adj" onclick="adjMin(-1)">−</button><input id="ip_min" type="number" min="0" value="5"><button class="btn btn-adj" onclick="adjMin(1)">+</button> 的IP　排序：<label><input id="sort_count" name="ip_sort" type="radio" checked> 访问量</label><label><input id="sort_ip" name="ip_sort" type="radio"> IP地址</label>　<label><input id="unblocked_only" type="checkbox"> 只看未封禁</label>　<span id="ip_summary" style="font-size:12px;color:#666"></span></div>
 <div id="ip_stats" class="loading">加载中...</div>
 </div>
 <div class="col">
@@ -92,22 +101,74 @@ function renderBot(data){
 function getCookie(k){const m=document.cookie.match(new RegExp('(?:^|;)\\s*'+k+'=([^;]*)'));return m?decodeURIComponent(m[1]):null}
 function setCookie(k,v){document.cookie=k+'='+encodeURIComponent(v)+';path=/;max-age=31536000'}
 
-function ipSortKey(ip){return ip.split('.').map(n=>n.padStart(3,'0')).join('')}
+function ipSortKey(ip){return ip.split('/')[0].split('.').map(n=>n.padStart(3,'0')).join('')}
+
+function ipToNum(ip){const p=ip.split('.').map(Number);return((p[0]<<24)|(p[1]<<16)|(p[2]<<8)|p[3])>>>0}
+
+function parseBlacklist(content){
+    const rules=[];
+    content.split('\\n').forEach(line=>{
+        const key=line.trim().split(/[\\s;]/)[0];
+        if(!key)return;
+        if(key.includes('/')){
+            const idx=key.indexOf('/');
+            const cidr=key.substring(0,idx);
+            const bits=parseInt(key.substring(idx+1));
+            const mask=(~((1<<(32-bits))-1))>>>0;
+            rules.push({type:'cidr',num:ipToNum(cidr),mask:mask});
+        }else{
+            rules.push({type:'single',ip:key});
+        }
+    });
+    return rules;
+}
+
+function isIPBlacklisted(ip,rules){
+    const ipNum=ipToNum(ip);
+    for(const r of rules){
+        if(r.type==='single'){if(ip===r.ip)return true}
+        else{if(((ipNum&r.mask)>>>0)===((r.num&r.mask)>>>0))return true}
+    }
+    return false;
+}
+
+function ipToCIDR(ip,bits){
+    const p=ip.split('.').map(Number);
+    if(bits===24)return p[0]+'.'+p[1]+'.'+p[2]+'.0/24';
+    if(bits===16)return p[0]+'.'+p[1]+'.0.0/16';
+    if(bits===8)return p[0]+'.0.0.0/8';
+    return ip;
+}
 
 function renderIP(data){
     if(data.error){document.getElementById('ip_stats').innerHTML='<p style="color:red">'+esc(data.error)+'</p>';return}
     const min=parseInt(document.getElementById('ip_min').value)||0;
-    const filtered=data.filter(x=>x[1]>=min);
+    const unblockedOnly=document.getElementById('unblocked_only').checked;
+    const blRules=parseBlacklist(document.getElementById('blacklist').value);
+    const filtered=data.filter(x=>{
+        if(x[1]<min)return false;
+        if(unblockedOnly&&isIPBlacklisted(x[0],blRules))return false;
+        return true;
+    });
     const byIp=document.getElementById('sort_ip').checked;
     const sorted=filtered.slice().sort((a,b)=>byIp?ipSortKey(a[0]).localeCompare(ipSortKey(b[0])):b[1]-a[1]);
     if(!sorted.length){document.getElementById('ip_stats').innerHTML='<p>无符合条件的数据</p>';return}
-    let h='<table><tr><th>#</th><th>IP</th><th>访问次数</th><th>操作</th></tr>';
+    let h='<table><tr><th>#</th><th>IP</th><th>访问次数</th><th>封禁<span class="tip">?<span class="tip-text">单IP：仅屏蔽此IP<br>C段：屏蔽 /24 网段（256个IP）<br>B段：屏蔽 /16 网段（65536个IP）<br>A段：屏蔽 /8 网段（约1677万个IP）</span></span></th></tr>';
     for(let i=0;i<sorted.length;i++){
-        h+='<tr><td>'+(i+1)+'</td><td>'+esc(sorted[i][0])+'</td><td>'+sorted[i][1]+'</td>';
-        h+='<td><button class="btn btn-sm" onclick="addBlacklist(\\''+sorted[i][0]+'\\')">加入黑名单</button></td></tr>';
+        const ip=sorted[i][0];
+        const blocked=isIPBlacklisted(ip,blRules);
+        const ipClass=blocked?'ip-blocked':'';
+        h+='<tr><td>'+(i+1)+'</td><td class="'+ipClass+'">'+esc(ip)+(blocked?' (已封禁)':'')+'</td><td>'+sorted[i][1]+'</td>';
+        h+='<td>';
+        h+='<button class="btn btn-block" onclick="addBL(\\''+ip+'\\')" title="屏蔽此单个IP">单IP</button>';
+        h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',24)" title="屏蔽 '+ipToCIDR(ip,24)+'（256个IP）">C段</button>';
+        h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',16)" title="屏蔽 '+ipToCIDR(ip,16)+'（65536个IP）">B段</button>';
+        h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',8)" title="屏蔽 '+ipToCIDR(ip,8)+'（约1677万个IP）">A段</button>';
+        h+='</td></tr>';
     }
-    h+='</table><p>筛选结果: '+sorted.length+' / 总去重IP: '+data.length+'</p>';
+    h+='</table>';
     document.getElementById('ip_stats').innerHTML=h;
+    document.getElementById('ip_summary').textContent='筛选结果: '+sorted.length+' / 总去重IP: '+data.length;
 }
 
 let allIPs=[];
@@ -121,38 +182,69 @@ function loadStats(){
     }).catch(e=>{document.getElementById('bot_stats').innerHTML='<p style="color:red">请求失败</p>'});
 }
 
-function addBlacklist(ip){
+function adjMin(delta){
+    const el=document.getElementById('ip_min');
+    el.value=Math.max(0,(parseInt(el.value)||0)+delta);
+    setCookie('ip_min',el.value);renderIP(allIPs);
+}
+
+function addBL(ip){
     const ta=document.getElementById('blacklist');
     const content=ta.value;
-    const lines=content.split('\\n').map(l=>l.trim().split(/\\s+/)[0]).filter(Boolean);
+    const lines=content.split('\\n').map(l=>l.trim().split(/[\\s;]/)[0]).filter(Boolean);
     if(lines.includes(ip)){alert(ip+' 已在黑名单中');return}
     const add=ip+' 1;';
-    ta.value=content?(content.rstrip?content.rstrip('\\n'):content.replace(/\\n+$/,''))+'\\n'+add:add;
+    ta.value=content?content.replace(/\\n+$/,'')+'\\n'+add:add;
     document.getElementById('msg').textContent='已添加 '+ip+'，请保存';
     document.getElementById('msg').style.color='green';
+    renderIP(allIPs);
+}
+
+function addBLCIDR(ip,bits){
+    if(bits===8){if(!confirm('A段封禁将屏蔽 '+ipToCIDR(ip,8)+'（约1677万个IP），是否确认？'))return}
+    const cidr=ipToCIDR(ip,bits);
+    const ta=document.getElementById('blacklist');
+    const content=ta.value;
+    const lines=content.split('\\n').map(l=>l.trim().split(/[\\s;]/)[0]).filter(Boolean);
+    if(lines.includes(cidr)){alert(cidr+' 已在黑名单中');return}
+    const add=cidr+' 1;';
+    ta.value=content?content.replace(/\\n+$/,'')+'\\n'+add:add;
+    document.getElementById('msg').textContent='已添加 '+cidr+'，请保存';
+    document.getElementById('msg').style.color='green';
+    renderIP(allIPs);
 }
 
 document.getElementById('ip_min').addEventListener('change',function(){
     setCookie('ip_min',this.value);renderIP(allIPs);
 });
-document.getElementById('sort_count').addEventListener('change',function(){renderIP(allIPs)});
-document.getElementById('sort_ip').addEventListener('change',function(){renderIP(allIPs)});
+document.getElementById('sort_count').addEventListener('change',function(){
+    setCookie('ip_sort','count');renderIP(allIPs);
+});
+document.getElementById('sort_ip').addEventListener('change',function(){
+    setCookie('ip_sort','ip');renderIP(allIPs);
+});
 document.getElementById('today_only').addEventListener('change',function(){
     setCookie('today_only',this.checked?'1':'0');loadStats();
 });
 document.getElementById('success_only').addEventListener('change',function(){
     setCookie('success_only',this.checked?'1':'0');loadStats();
 });
+document.getElementById('unblocked_only').addEventListener('change',function(){
+    setCookie('unblocked_only',this.checked?'1':'0');renderIP(allIPs);
+});
 (function(){
     const v=getCookie('ip_min');if(v)document.getElementById('ip_min').value=v;
+    const so=getCookie('ip_sort');if(so==='ip'){document.getElementById('sort_ip').checked=true}
     const t=getCookie('today_only');if(t==='1')document.getElementById('today_only').checked=true;
     const s=getCookie('success_only');if(s==='1')document.getElementById('success_only').checked=true;
+    const u=getCookie('unblocked_only');if(u==='1')document.getElementById('unblocked_only').checked=true;
 })();
 
 function loadBlacklist(){
     fetch('api/blacklist').then(r=>r.json()).then(d=>{
         document.getElementById('blacklist').value=d.content||'';
         document.getElementById('msg').textContent='';
+        if(allIPs.length)renderIP(allIPs);
     }).catch(e=>{document.getElementById('msg').textContent='加载失败'});
 }
 
@@ -160,19 +252,20 @@ function sortBlacklist(){
     const ta=document.getElementById('blacklist');
     const lines=ta.value.split('\\n').filter(l=>l.trim());
     lines.sort((a,b)=>{
-        const ka=a.trim().split(/\\s+/)[0],kb=b.trim().split(/\\s+/)[0];
+        const ka=a.trim().split(/[\\s;]/)[0],kb=b.trim().split(/[\\s;]/)[0];
         return ipSortKey(ka).localeCompare(ipSortKey(kb));
     });
     ta.value=lines.join('\\n');
     document.getElementById('msg').textContent='已按IP排序';
     document.getElementById('msg').style.color='green';
+    if(allIPs.length)renderIP(allIPs);
 }
 
 function findDupLines(content){
     const lines=content.split('\\n').filter(l=>l.trim());
     const seen={}, dups=[];
     lines.forEach((l,i)=>{
-        const key=l.trim().split(/\\s+/)[0];
+        const key=l.trim().split(/[\\s;]/)[0];
         if(!key)return;
         if(seen[key]!==undefined){dups.push({line:i+1,ip:key,first:seen[key]+1})}
         else{seen[key]=i}
