@@ -7,15 +7,17 @@ BLACKLIST_PATH = "/etc/nginx/conf.d/black_ip.conf"
 PORT = 9999
 
 BOTS = [
-    ("Bingbot",      re.compile(r"bingbot", re.I)),
-    ("Googlebot",    re.compile(r"googlebot", re.I)),
-    ("BaiduSpider",  re.compile(r"baiduspider", re.I)),
-    ("DuckDuckBot",  re.compile(r"duckduckbot", re.I)),
-    ("YandexBot",    re.compile(r"yandexbot", re.I)),
-    ("NaverBot",     re.compile(r"naverbot", re.I)),
-    ("SogouSpider",  re.compile(r"sogou\sspider", re.I)),
-    ("360Spider",    re.compile(r"360spider", re.I)),
-    ("ShenmaSpider", re.compile(r"shenma", re.I)),
+    ("Bingbot",       "必应", re.compile(r"bingbot", re.I)),
+    ("Googlebot",     "谷歌", re.compile(r"googlebot", re.I)),
+    ("BaiduSpider",   "百度", re.compile(r"baiduspider", re.I)),
+    ("DuckDuckBot",   "DuckDuckGo", re.compile(r"duckduckbot", re.I)),
+    ("YandexBot",     "Yandex", re.compile(r"yandexbot", re.I)),
+    ("SogouSpider",   "搜狗", re.compile(r"sogou.*spider", re.I)),
+    ("360Spider",     "360", re.compile(r"360spider", re.I)),
+    ("Bytespider",    "字节", re.compile(r"bytespider", re.I)),
+    ("PetalBot",      "华为花瓣", re.compile(r"petalbot", re.I)),
+    ("YisouSpider",   "神马", re.compile(r"yisouspider", re.I)),
+    ("OAI-SearchBot", "OpenAI", re.compile(r"oai-searchbot", re.I)),
 ]
 
 IP_PATTERN = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
@@ -47,6 +49,7 @@ input[type=number]{width:42px;padding:2px 4px;font-family:monospace;font-size:13
 .btn-adj{padding:2px 6px;font-size:14px;font-weight:bold;line-height:1}
 .btn-block{padding:2px 5px;font-size:11px;margin:0 1px;border-radius:3px}
 .ip-blocked{color:red;font-weight:bold}
+.bot-tag{display:inline-block;font-size:10px;color:#2a7;border:1px solid #2a7;border-radius:3px;padding:0 4px;margin-left:4px;cursor:help}
 .tip{display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;font-size:11px;border:1px solid #999;border-radius:50%;cursor:help;color:#666;margin-left:4px;vertical-align:middle;position:relative}
 .tip:hover .tip-text{display:block}
 .tip-text{display:none;position:absolute;left:0;top:18px;background:#333;color:#fff;padding:8px 10px;border-radius:4px;font-size:11px;line-height:1.6;white-space:nowrap;z-index:9}
@@ -55,6 +58,10 @@ textarea{width:100%;height:260px;border:1px solid #ddd;padding:6px;font-family:m
 #cmd_msg{margin:6px 0;font-size:12px;white-space:pre-wrap}
 .loading{color:#999}
 label{font-size:12px;font-weight:normal;margin-left:8px}
+.filter-bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-bottom:6px}
+.filter-bar label{margin-left:0}
+.filter-grp{white-space:nowrap}
+#ip_summary{font-size:12px;color:#666;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -64,7 +71,7 @@ label{font-size:12px;font-weight:normal;margin-left:8px}
 <h2>爬虫访问统计 <label><input id="today_only" type="checkbox"> 只看当天</label><label><input id="success_only" type="checkbox"> 只看成功请求</label></h2>
 <div id="bot_stats" class="loading">加载中...</div>
 <h2 style="margin-top:12px">IP访问次数明细（去重）</h2>
-<div style="margin-bottom:6px">只看访问次数 ≥ <button class="btn btn-adj" onclick="adjMin(-1)">−</button><input id="ip_min" type="number" min="0" value="5"><button class="btn btn-adj" onclick="adjMin(1)">+</button> 的IP　排序：<label><input id="sort_count" name="ip_sort" type="radio" checked> 访问量</label><label><input id="sort_ip" name="ip_sort" type="radio"> IP地址</label>　<label><input id="unblocked_only" type="checkbox"> 只看未封禁</label>　<span id="ip_summary" style="font-size:12px;color:#666"></span></div>
+<div class="filter-bar"><span class="filter-grp">只看访问次数 ≥ <button class="btn btn-adj" onclick="adjMin(-1)">−</button><input id="ip_min" type="number" min="0" value="5"><button class="btn btn-adj" onclick="adjMin(1)">+</button> 的IP</span><span class="filter-grp">排序：<label><input id="sort_count" name="ip_sort" type="radio" checked> 访问量</label><label><input id="sort_ip" name="ip_sort" type="radio"> IP地址</label></span><label><input id="unblocked_only" type="checkbox"> 只看未封禁</label><label><input id="hide_bots" type="checkbox"> 不显示搜索引擎</label><span id="ip_summary"></span></div>
 <div id="ip_stats" class="loading">加载中...</div>
 </div>
 <div class="col">
@@ -144,10 +151,12 @@ function renderIP(data){
     if(data.error){document.getElementById('ip_stats').innerHTML='<p style="color:red">'+esc(data.error)+'</p>';return}
     const min=parseInt(document.getElementById('ip_min').value)||0;
     const unblockedOnly=document.getElementById('unblocked_only').checked;
+    const hideBots=document.getElementById('hide_bots').checked;
     const blRules=parseBlacklist(document.getElementById('blacklist').value);
     const filtered=data.filter(x=>{
         if(x[1]<min)return false;
         if(unblockedOnly&&isIPBlacklisted(x[0],blRules))return false;
+        if(hideBots&&botIPs[x[0]])return false;
         return true;
     });
     const byIp=document.getElementById('sort_ip').checked;
@@ -157,8 +166,10 @@ function renderIP(data){
     for(let i=0;i<sorted.length;i++){
         const ip=sorted[i][0];
         const blocked=isIPBlacklisted(ip,blRules);
+        const botLabel=botIPs[ip];
         const ipClass=blocked?'ip-blocked':'';
-        h+='<tr><td>'+(i+1)+'</td><td class="'+ipClass+'">'+esc(ip)+(blocked?' (已封禁)':'')+'</td><td>'+sorted[i][1]+'</td>';
+        const botTag=botLabel?' <span class="bot-tag" title="该IP命中搜索引擎爬虫UA，请谨慎封禁">🔍'+esc(botLabel)+'</span>':'';
+        h+='<tr><td>'+(i+1)+'</td><td class="'+ipClass+'">'+esc(ip)+(blocked?' (已封禁)':'')+botTag+'</td><td>'+sorted[i][1]+'</td>';
         h+='<td>';
         h+='<button class="btn btn-block" onclick="addBL(\\''+ip+'\\')" title="屏蔽此单个IP">单IP</button>';
         h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',24)" title="屏蔽 '+ipToCIDR(ip,24)+'（256个IP）">C段</button>';
@@ -172,13 +183,14 @@ function renderIP(data){
 }
 
 let allIPs=[];
+let botIPs={};
 function loadStats(){
     const p=new URLSearchParams();
     if(document.getElementById('today_only').checked)p.set('today','1');
     if(document.getElementById('success_only').checked)p.set('success','1');
     const qs=p.toString();
     fetch('api/stats'+(qs?'?'+qs:'')).then(r=>r.json()).then(d=>{
-        renderBot(d.bots);allIPs=d.ips;renderIP(allIPs);
+        renderBot(d.bots);allIPs=d.ips;botIPs=d.bot_ips||{};renderIP(allIPs);
     }).catch(e=>{document.getElementById('bot_stats').innerHTML='<p style="color:red">请求失败</p>'});
 }
 
@@ -232,12 +244,16 @@ document.getElementById('success_only').addEventListener('change',function(){
 document.getElementById('unblocked_only').addEventListener('change',function(){
     save('unblocked_only',this.checked?'1':'0');renderIP(allIPs);
 });
+document.getElementById('hide_bots').addEventListener('change',function(){
+    save('hide_bots',this.checked?'1':'0');renderIP(allIPs);
+});
 (function(){
     const v=load('ip_min');if(v)document.getElementById('ip_min').value=v;
     const so=load('ip_sort');if(so==='ip'){document.getElementById('sort_ip').checked=true}
     const t=load('today_only');if(t==='1')document.getElementById('today_only').checked=true;
     const s=load('success_only');if(s==='1')document.getElementById('success_only').checked=true;
     const u=load('unblocked_only');if(u==='1')document.getElementById('unblocked_only').checked=true;
+    const hb=load('hide_bots');if(hb==='1')document.getElementById('hide_bots').checked=true;
 })();
 
 function loadBlacklist(){
@@ -323,9 +339,10 @@ loadBlacklist();
 def analyze_logs(paths=None, success_only=False):
     if paths is None:
         paths = LOG_PATHS
-    bot_counts = {name: 0 for name, _ in BOTS}
+    bot_counts = {name: 0 for name, _, _ in BOTS}
     bot_counts["total"] = 0
     ip_counts = {}
+    bot_ips = {}
 
     for path in paths:
         try:
@@ -336,19 +353,23 @@ def analyze_logs(paths=None, success_only=False):
                         if m_status and m_status.group(1).startswith("4"):
                             continue
                     bot_counts["total"] += 1
-                    for name, pat in BOTS:
+                    matched_bot = None
+                    for name, label, pat in BOTS:
                         if pat.search(line):
                             bot_counts[name] += 1
+                            matched_bot = label
                             break
                     m = IP_PATTERN.match(line)
                     if m:
                         ip = m.group(1)
                         ip_counts[ip] = ip_counts.get(ip, 0) + 1
+                        if matched_bot:
+                            bot_ips[ip] = matched_bot
         except FileNotFoundError:
             pass
 
     sorted_ips = sorted(ip_counts.items(), key=lambda x: x[1], reverse=True)
-    return bot_counts, sorted_ips
+    return bot_counts, sorted_ips, bot_ips
 
 
 def read_blacklist():
@@ -394,8 +415,8 @@ class Handler(BaseHTTPRequestHandler):
             today = "today=1" in qs
             success = "success=1" in qs
             paths = [LOG_PATHS[0]] if today else LOG_PATHS
-            bot_counts, sorted_ips = analyze_logs(paths, success_only=success)
-            data = {"bots": bot_counts, "ips": sorted_ips}
+            bot_counts, sorted_ips, bot_ips = analyze_logs(paths, success_only=success)
+            data = {"bots": bot_counts, "ips": sorted_ips, "bot_ips": bot_ips}
             self._json(data)
         elif self.path == "/api/blacklist":
             content = read_blacklist()

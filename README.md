@@ -6,7 +6,8 @@
 
 ## 功能
 
-- **爬虫统计** — 识别 9 大搜索引擎爬虫，支持仅当天、仅成功请求筛选
+- **爬虫统计** — 识别主流搜索引擎爬虫（见下表），支持仅当天、仅成功请求筛选
+- **搜索引擎标记** — 命中搜索引擎爬虫 UA 的 IP 自动标记，避免误封；可一键隐藏
 - **IP 访问统计** — 去重统计每个 IP 访问次数，可调阈值、按访问量或 IP 地址排序
 - **多级封禁** — 支持单 IP、C 段（/24）、B 段（/16）、A 段（/8）一键封禁
 - **黑名单编辑** — 在线编辑 Nginx `geo` 黑名单，支持重复检测、IP 排序、一键保存
@@ -16,6 +17,22 @@
 ## 零依赖
 
 仅使用 Python 3 标准库，无需任何框架，直接运行，开箱即用。
+
+## 支持的搜索引擎
+
+| 名称 | 归属 | 匹配 UA 关键字 |
+|------|------|----------------|
+| Bingbot | 微软 Bing | `bingbot` |
+| Googlebot | 谷歌 | `googlebot` |
+| BaiduSpider | 百度 | `baiduspider` |
+| DuckDuckBot | DuckDuckGo | `duckduckbot` |
+| YandexBot | Yandex | `yandexbot` |
+| SogouSpider | 搜狗 | `sogou...spider` |
+| 360Spider | 360 搜索 | `360spider` |
+| Bytespider | 字节跳动（含今日头条） | `bytespider` |
+| PetalBot | 华为花瓣搜索 | `petalbot` |
+| YisouSpider | 神马搜索（UC） | `yisouspider` |
+| OAI-SearchBot | OpenAI 搜索 | `oai-searchbot` |
 
 ## 快速开始
 
@@ -62,7 +79,8 @@ bash restart.sh
 - **爬虫统计** — 勾选「只看当天」或「只看成功请求」可筛选数据
 - **IP 统计** — 通过 ±按钮 调整访问次数阈值，按访问量或 IP 地址排序
 - **只看未封禁** — 勾选后仅显示未被黑名单覆盖的 IP
-- 已封禁的 IP 会显示为红色
+- **不显示搜索引擎** — 勾选后隐藏命中搜索引擎爬虫 UA 的 IP
+- 已封禁的 IP 会显示为红色，命中搜索引擎的 IP 会标记 `🔍搜索引擎`（请谨慎封禁）
 
 ### 封禁 IP
 
