@@ -92,6 +92,29 @@
         return entries[0][0];
     }
 
+    function normalizeReferrer(referrer) {
+        const value = String(referrer || '').trim();
+        if (!value || value === '-' || value.length < 8) return '';
+        return value;
+    }
+
+    function isSearchReferrer(referrer) {
+        const value = normalizeReferrer(referrer);
+        if (!value) return false;
+        return /(?:baidu|google|bing|sogou|so\.com|360|sm\.cn|yandex|duckduckgo|chatgpt|openai|doubao|toutiao|bytes|perplexity|quark|shenma)/i.test(value);
+    }
+
+    function isBrowserUserAgent(ua) {
+        return /Mozilla|Chrome|Safari|Firefox|Edg|OPR|MicroMessenger|QQBrowser|Quark|UCBrowser|Mobile/i.test(ua || '');
+    }
+
+    function sourceTypeLabel(group) {
+        const referrer = normalizeReferrer(group.referrer);
+        if (group.bot || isSearchReferrer(referrer)) return '搜索/AI来源';
+        if (referrer && isBrowserUserAgent(group.ua)) return '用户来源';
+        return '其他/无来源';
+    }
+
     function buildGroups() {
         const map = new Map();
         for (const item of state.logItems) {
@@ -176,6 +199,8 @@
             rows.length + ' / ' + state.groups.length + ' IP；前缀排除 ' + excluded + ' IP';
         $('rows').innerHTML = rows.slice(start, start + PAGE_SIZE).map((group, index) => {
             const type = classify(group);
+            const sourceType = sourceTypeLabel(group);
+            const rawReferrer = normalizeReferrer(group.referrer) || '-';
             const labels = [
                 type.blocked ? '<span class="tag">当前IP封禁</span>' :
                     (type.black && type.trusted ? '<span class="tag">白名单已覆盖黑名单</span>' : '<span class="tag">非IP规则</span>'),
@@ -188,7 +213,8 @@
                 '<td>' + formatNumber(group.count) + '</td>' +
                 '<td class="nowrap"><small>' + esc(group.first) + '<br>' + esc(group.last) + '</small></td>' +
                 '<td style="max-width:520px;white-space:normal"><b>路径：</b><span class="mono">' + esc(group.path || '-') + '</span><br>' +
-                '<b>UA：</b>' + esc(group.ua || '-') + '<br><b>来源：</b>' + esc(group.referrer || '-') + '</td>' +
+                '<b>UA：</b>' + esc(group.ua || '-') + '<br><b>来源类型：</b>' + esc(sourceType) +
+                '<br><b>原始来源：</b>' + esc(rawReferrer) + '</td>' +
                 '<td class="nowrap"><button class="hide-prefix" data-prefix="' + esc(prefix) + '">不看 ' + esc(prefix) + '*</button><br>' +
                 '<button class="trust-ip primary" data-ip="' + esc(group.ip) + '" ' + (type.trusted ? 'disabled' : '') + '>加入白名单</button></td></tr>';
         }).join('') || '<tr><td colspan="6" class="empty">没有符合筛选条件的 444 记录</td></tr>';

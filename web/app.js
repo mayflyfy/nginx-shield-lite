@@ -473,18 +473,16 @@
         let rows = Object.entries(state.bucket.ips).filter(([ip, count]) => {
             const status = ipPolicyStatus(ip);
             const bot = state.bucket.botIps[ip];
-            const hasReferrer = state.bucket.referrerIps[ip] > 0;
             const hasSearchSource = Boolean(bot || state.bucket.searchIps[ip] > 0);
             const hasUserSource = Boolean(state.bucket.userIps[ip] > 0);
-            const hasUnknownSource = Boolean(state.bucket.unknownSourceIps[ip] > 0);
+            const hasOtherSource = !hasSearchSource && !hasUserSource;
             if (count < min) return false;
             if (hideBots && bot && sourceScope !== 'search') return false;
             if (scope === 'blacklisted' && !status.blacklisted) return false;
             if (scope === 'allowlisted' && !status.allowlisted) return false;
             if (sourceScope === 'search' && !hasSearchSource) return false;
             if (sourceScope === 'user' && (!hasUserSource || hasSearchSource)) return false;
-            if (sourceScope === 'unknown' && (!hasUnknownSource || hasSearchSource || hasUserSource)) return false;
-            if (sourceScope === 'none' && (hasReferrer || hasSearchSource)) return false;
+            if ((sourceScope === 'other' || sourceScope === 'unknown' || sourceScope === 'none') && !hasOtherSource) return false;
             return true;
         });
         if ($('ip_sort').value === 'ip') rows.sort((a, b) => ipSortKey(a[0]).localeCompare(ipSortKey(b[0])));
@@ -494,7 +492,7 @@
 
     function exportIps() {
         const lines = [
-            ['IP', '访问次数', '命中黑名单', '命中白名单', '有效封禁', '搜索或AI识别', 'Referer请求数'].map(csvCell).join(',')
+            ['IP', '访问次数', '命中黑名单', '命中白名单', '有效封禁', '搜索或AI识别', '有效来源请求数'].map(csvCell).join(',')
         ];
         for (const [ip, count] of filteredIpRows()) {
             const status = ipPolicyStatus(ip);
@@ -550,7 +548,7 @@
                     : state.bucket.userIps[ip] > 0
                         ? '\u7528\u6237\u6765\u6e90'
                         : state.bucket.unknownSourceIps[ip] > 0
-                            ? '\u672a\u6807\u8bc6\u6765\u6e90'
+                            ? '\u5176\u4ed6\u6765\u6e90'
                             : '';
             const actions = String(ip).includes(':')
                 ? '<button class="block-ip btn-xs" data-ip="' + esc(ip) + '" data-bits="128">单IP</button>'

@@ -5,7 +5,7 @@
     const DB_NAME = 'nginx-shield-lite';
     const DB_VERSION = 1;
     const LOG_STORE = 'log_files';
-    const LOG_CACHE_VERSION = 4;
+    const LOG_CACHE_VERSION = 5;
 
     const BOT_PATTERNS = [
         ['Bingbot', '必应', /bingbot/i],
@@ -247,13 +247,20 @@
         };
     }
 
+    function normalizeReferrer(referrer) {
+        const value = String(referrer || '').trim();
+        if (!value || value === '-' || value.length < 8) return '';
+        return value;
+    }
+
     function hasReferrer(event) {
-        return Boolean(event.referrer && event.referrer !== '-');
+        return Boolean(normalizeReferrer(event.referrer));
     }
 
     function isSearchReferrer(referrer) {
-        if (!referrer || referrer === '-') return false;
-        return /(?:baidu|google|bing|sogou|so\.com|360|sm\.cn|yandex|duckduckgo|chatgpt|openai|doubao|toutiao|bytes|perplexity|quark|shenma)/i.test(referrer);
+        const value = normalizeReferrer(referrer);
+        if (!value) return false;
+        return /(?:baidu|google|bing|sogou|so\.com|360|sm\.cn|yandex|duckduckgo|chatgpt|openai|doubao|toutiao|bytes|perplexity|quark|shenma)/i.test(value);
     }
 
     function isBrowserUserAgent(ua) {
@@ -270,11 +277,12 @@
             bucket.bots[bot.name] = (bucket.bots[bot.name] || 0) + 1;
             bucket.botIps[event.ip] = bot.label;
         }
+        const meaningfulReferrer = hasReferrer(event);
         if (bot || isSearchReferrer(event.referrer)) {
             bucket.searchIps[event.ip] = (bucket.searchIps[event.ip] || 0) + 1;
-        } else if (isBrowserUserAgent(event.ua)) {
+        } else if (meaningfulReferrer && isBrowserUserAgent(event.ua)) {
             bucket.userIps[event.ip] = (bucket.userIps[event.ip] || 0) + 1;
-        } else if (hasReferrer(event)) {
+        } else if (meaningfulReferrer) {
             bucket.unknownSourceIps[event.ip] = (bucket.unknownSourceIps[event.ip] || 0) + 1;
         }
     }
