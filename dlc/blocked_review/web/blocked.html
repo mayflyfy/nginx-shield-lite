@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>444 拦截审核 - Nginx Shield Lite</title>
+<link rel="stylesheet" href="static/styles.css?v=20260707-1">
+</head>
+<body>
+<header>
+  <div class="brand">Nginx Shield Lite <small>444 拦截审核</small></div>
+  <nav data-nsl-nav><a href="./">访问分析</a></nav>
+  <label class="api-setting">Nginx代理/API地址
+    <input id="api_base" placeholder="留空=当前地址；例 /shield">
+  </label>
+</header>
+<main>
+  <div id="log_progress" class="panel">
+    <div class="panel-body"><div id="log_progress_text">正在加载浏览器日志缓存…</div><div class="progress"><i id="log_progress_bar"></i></div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>不看这些 IP 前缀</h2><span class="muted">规则保存在当前浏览器 localStorage，可配置任意数量</span></div>
+    <div class="panel-body">
+      <div class="toolbar">
+        <input id="prefix_input" placeholder="例如 66.249. 或 192.168.1." style="width:260px">
+        <button id="prefix_add">添加前缀</button>
+        <button id="prefix_clear">清空</button>
+      </div>
+      <div id="prefix_list" class="prefix-list"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>444 IP 审核</h2><span id="summary" class="muted"></span><span class="spacer"></span><button id="refresh_logs">刷新日志缓存</button></div>
+    <div class="panel-body">
+      <div class="toolbar">
+        <input id="query" placeholder="搜索 IP、路径、UA、来源" style="flex:1;min-width:230px">
+        <label>最少拦截 <input id="min_count" type="number" min="1" value="1" style="width:72px"></label>
+        <select id="reason_filter">
+          <option value="all">全部原因</option>
+          <option value="black">命中黑名单</option>
+          <option value="other">未命中黑名单（UA/路径/限速等）</option>
+          <option value="bot">识别爬虫</option>
+        </select>
+        <select id="sort">
+          <option value="count">按拦截次数</option>
+          <option value="recent">按最近时间</option>
+          <option value="ip">按 IP</option>
+        </select>
+      </div>
+      <div class="scroll" style="max-height:680px">
+        <table>
+          <thead><tr><th>#</th><th>IP / 判断</th><th>次数</th><th>首次 / 最近</th><th>样例路径 / UA / 来源</th><th>操作</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="pager" class="pagination"></div>
+    </div>
+  </div>
+</main>
+<script src="static/common.js?v=20260707-1"></script>
+<script src="dlc/blocked_review/web/blocked.js?v=20260707-1"></script>
+</body>
+</html>

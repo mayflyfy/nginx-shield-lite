@@ -1,0 +1,14 @@
+{
+  "id": "blocked_review",
+  "name": "444 误拦审核",
+  "version": "1.0.0",
+  "enabled_by_default": true,
+  "routes": {
+    "/blocked": "web/blocked.html",
+    "/444": "web/blocked.html"
+  },
+  "nav": {
+    "label": "444 审核",
+    "path": "/blocked"
+  }
+}

@@ -1,10 +1,144 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import re, json, os, subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
+import hashlib
+import glob
+import json
+import mimetypes
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+from urllib.parse import parse_qs, urlsplit
 
 # ========== Config ==========
-LOG_PATHS = ["/var/log/nginx/access.log", "/var/log/nginx/access.log.1"]
-BLACKLIST_PATH = "/etc/nginx/conf.d/black_ip.conf"
-PORT = 9999
+BASE_DIR = Path(__file__).resolve().parent
+WEB_ROOT = BASE_DIR / "web"
+DLC_ROOT = BASE_DIR / "dlc"
+
+
+def _safe_child(root, relative):
+    """Resolve an untrusted relative path without allowing directory escape."""
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return target
+
+
+def _load_dlc_plugins():
+    """Discover optional DLCs without making them a core dependency."""
+    disabled = {
+        item.strip()
+        for item in os.environ.get("NSL_DISABLED_DLC", "").split(",")
+        if item.strip()
+    }
+    plugins = []
+    claimed_routes = set()
+    if not DLC_ROOT.is_dir():
+        return plugins
+
+    for manifest_path in sorted(DLC_ROOT.glob("*/manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            plugin_id = manifest["id"]
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", plugin_id):
+                raise ValueError("id 必须使用 snake_case")
+            if plugin_id in disabled or not manifest.get("enabled_by_default", True):
+                continue
+            root = manifest_path.parent.resolve()
+            routes = {}
+            for route, relative in manifest.get("routes", {}).items():
+                route = "/" + route.strip("/")
+                if route == "/" or route.startswith(("/api/", "/static/", "/dlc/")):
+                    raise ValueError(f"扩展路由使用了核心保留路径: {route}")
+                if route in claimed_routes:
+                    raise ValueError(f"扩展路由冲突: {route}")
+                target = _safe_child(root, relative)
+                if target is None or not target.is_file():
+                    raise ValueError(f"路由文件不存在: {relative}")
+                routes[route] = target
+            claimed_routes.update(routes)
+            plugins.append({
+                "id": plugin_id,
+                "name": manifest.get("name", plugin_id),
+                "version": manifest.get("version", "0"),
+                "root": root,
+                "routes": routes,
+                "nav": manifest.get("nav"),
+            })
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"[DLC] 跳过 {manifest_path}: {exc}")
+    return plugins
+
+
+DLC_PLUGINS = _load_dlc_plugins()
+DLC_ROUTES = {
+    route: (plugin, target)
+    for plugin in DLC_PLUGINS
+    for route, target in plugin["routes"].items()
+}
+
+
+def _configured_log_paths():
+    configured = os.environ.get("NSL_LOG_PATHS", "/var/log/nginx/access.log*")
+    paths = []
+    for entry in configured.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        matches = glob.glob(entry) if any(char in entry for char in "*?[") else [entry]
+        paths.extend(matches)
+
+    def rotation_key(path):
+        name = os.path.basename(path)
+        if name == "access.log":
+            return (0, 0, name)
+        match = re.search(r"\.(\d+)(?:\.gz)?$", name)
+        return (1, int(match.group(1)) if match else 10**9, name)
+
+    return sorted(dict.fromkeys(paths), key=rotation_key)
+
+
+LOG_PATHS = _configured_log_paths()
+BLACKLIST_PATH = os.environ.get(
+    "NSL_BLACKLIST_PATH", "/etc/nginx/conf.d/black_ip.conf"
+)
+TRUSTEDLIST_PATH = os.environ.get(
+    "NSL_TRUSTEDLIST_PATH", "/etc/nginx/conf.d/trusted_ip.conf"
+)
+PORT = int(os.environ.get("NSL_PORT", "9999"))
+LOG_CHUNK_SIZE = 8 * 1024 * 1024
+LIST_PATHS = {
+    "black": BLACKLIST_PATH,
+    "trusted": TRUSTEDLIST_PATH,
+}
+
+
+def normalize_app_path(path):
+    """Accept direct routes and routes mounted below an Nginx subpath.
+
+    Examples:
+      /static/app.js        -> /static/app.js
+      /cstat/static/app.js  -> /static/app.js
+      /cstat/api/config     -> /api/config
+      /cstat/blocked        -> /blocked（由可选 DLC 提供）
+    """
+    for marker in ("/api/", "/static/", "/dlc/"):
+        position = path.find(marker)
+        if position >= 0:
+            return path[position:]
+    trimmed = path.rstrip("/")
+    for route in DLC_ROUTES:
+        if trimmed == route or trimmed.endswith(route):
+            return route
+    if trimmed.endswith("/index.html"):
+        return "/"
+    segments = [segment for segment in trimmed.split("/") if segment]
+    if not segments or (len(segments) == 1 and path.endswith("/")):
+        return "/"
+    return trimmed or "/"
 
 BOTS = [
     ("Bingbot",       "必应", re.compile(r"bingbot", re.I)),
@@ -12,330 +146,21 @@ BOTS = [
     ("BaiduSpider",   "百度", re.compile(r"baiduspider", re.I)),
     ("DuckDuckBot",   "DuckDuckGo", re.compile(r"duckduckbot", re.I)),
     ("YandexBot",     "Yandex", re.compile(r"yandexbot", re.I)),
-    ("SogouSpider",   "搜狗", re.compile(r"sogou.*spider", re.I)),
-    ("360Spider",     "360", re.compile(r"360spider", re.I)),
+    ("SogouSpider",   "搜狗", re.compile(r"sogou.*(?:spider|web)", re.I)),
+    ("360Spider",     "360", re.compile(r"360spider|haosouspider", re.I)),
     ("Bytespider",    "字节", re.compile(r"bytespider", re.I)),
     ("PetalBot",      "华为花瓣", re.compile(r"petalbot", re.I)),
-    ("YisouSpider",   "神马", re.compile(r"yisouspider", re.I)),
+    ("YisouSpider",   "神马", re.compile(r"yisouspider|shenmaspider", re.I)),
     ("OAI-SearchBot", "OpenAI", re.compile(r"oai-searchbot", re.I)),
+    ("ChatGPT-User",  "OpenAI 用户访问", re.compile(r"chatgpt-user", re.I)),
+    ("GPTBot",        "OpenAI GPTBot", re.compile(r"gptbot", re.I)),
+    ("Doubao-User",   "豆包用户访问", re.compile(r"samanthadoubao|appname/doubao", re.I)),
 ]
 
 IP_PATTERN = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
 STATUS_PATTERN = re.compile(r"\" (\d{3}) ")
 
-# ========== HTML ==========
-HTML = """<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="utf-8">
-<title>nginx-shield-lite</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:monospace;background:#fff;color:#333;padding:16px;font-size:13px}
-.brand{font-size:17px;font-weight:bold;color:#222;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #222;display:flex;align-items:center;gap:8px}
-.brand span{font-size:11px;color:#888;font-weight:normal}
-h2{font-size:15px;margin:0 0 8px;padding-bottom:4px;border-bottom:1px solid #ddd}
-.row{display:flex;gap:16px}
-.col{flex:1;min-width:0}
-table{border-collapse:collapse;width:100%;margin-bottom:8px}
-th,td{border:1px solid #ddd;padding:4px 8px;text-align:left}
-th{background:#f5f5f5}
-tr:nth-child(even){background:#fafafa}
-input[type=number]{width:42px;padding:2px 4px;font-family:monospace;font-size:13px;text-align:center}
-.btn{background:#fff;border:1px solid #999;padding:4px 14px;cursor:pointer;font-family:monospace;font-size:13px}
-.btn:hover{background:#eee}
-.btn:disabled{opacity:.4;cursor:not-allowed}
-.btn-sm{padding:2px 8px;font-size:12px}
-.btn-adj{padding:2px 6px;font-size:14px;font-weight:bold;line-height:1}
-.btn-block{padding:2px 5px;font-size:11px;margin:0 1px;border-radius:3px}
-.ip-blocked{color:red;font-weight:bold}
-.bot-tag{display:inline-block;font-size:10px;color:#2a7;border:1px solid #2a7;border-radius:3px;padding:0 4px;margin-left:4px;cursor:help}
-.tip{display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;font-size:11px;border:1px solid #999;border-radius:50%;cursor:help;color:#666;margin-left:4px;vertical-align:middle;position:relative}
-.tip:hover .tip-text{display:block}
-.tip-text{display:none;position:absolute;left:0;top:18px;background:#333;color:#fff;padding:8px 10px;border-radius:4px;font-size:11px;line-height:1.6;white-space:nowrap;z-index:9}
-textarea{width:100%;height:260px;border:1px solid #ddd;padding:6px;font-family:monospace;font-size:12px;resize:vertical}
-#msg{margin:4px 0;font-size:12px}
-#cmd_msg{margin:6px 0;font-size:12px;white-space:pre-wrap}
-.loading{color:#999}
-label{font-size:12px;font-weight:normal;margin-left:8px}
-.filter-bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-bottom:6px}
-.filter-bar label{margin-left:0}
-.filter-grp{white-space:nowrap}
-#ip_summary{font-size:12px;color:#666;white-space:nowrap}
-</style>
-</head>
-<body>
-<div class="brand">nginx-shield-lite <span>轻量级 Nginx 日志分析 &amp; IP 黑名单管理</span></div>
-<div class="row">
-<div class="col">
-<h2>爬虫访问统计 <label><input id="today_only" type="checkbox"> 只看当天</label><label><input id="success_only" type="checkbox"> 只看成功请求</label></h2>
-<div id="bot_stats" class="loading">加载中...</div>
-<h2 style="margin-top:12px">IP访问次数明细（去重）</h2>
-<div class="filter-bar"><span class="filter-grp">只看访问次数 ≥ <button class="btn btn-adj" onclick="adjMin(-1)">−</button><input id="ip_min" type="number" min="0" value="5"><button class="btn btn-adj" onclick="adjMin(1)">+</button> 的IP</span><span class="filter-grp">排序：<label><input id="sort_count" name="ip_sort" type="radio" checked> 访问量</label><label><input id="sort_ip" name="ip_sort" type="radio"> IP地址</label></span><label><input id="unblocked_only" type="checkbox"> 只看未封禁</label><label><input id="hide_bots" type="checkbox"> 不显示搜索引擎</label><span id="ip_summary"></span></div>
-<div id="ip_stats" class="loading">加载中...</div>
-</div>
-<div class="col">
-<h2>IP黑名单编辑 <span style="font-size:11px;color:#888">/etc/nginx/conf.d/black_ip.conf</span></h2>
-<div id="msg"></div>
-<textarea id="blacklist" spellcheck="false"></textarea>
-<br>
-<button class="btn" onclick="checkDup()">检查重复</button>
-<button class="btn" onclick="sortBlacklist()">按IP排序</button>
-<button class="btn" onclick="saveBlacklist()">保存</button>
-<button class="btn" onclick="loadBlacklist()">重新加载</button>
-<h2 style="margin-top:12px">Nginx操作</h2>
-<div>
-<button class="btn" id="btn_test" onclick="nginxTest()">检查配置</button>
-<button class="btn" id="btn_reload" onclick="nginxReload()" disabled>重载Nginx</button>
-</div>
-<div id="cmd_msg"></div>
-</div>
-</div>
-
-<script>
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-
-function renderBot(data){
-    if(data.error){document.getElementById('bot_stats').innerHTML='<p style="color:red">'+esc(data.error)+'</p>';return}
-    let h='<table><tr><th>爬虫</th><th>访问次数</th></tr>';
-    let total=0;
-    for(let k in data)if(k!=='total'){h+='<tr><td>'+esc(k)+'</td><td>'+data[k]+'</td>';total+=data[k]}
-    h+='<tr style="font-weight:bold"><td>合计（匹配爬虫）</td><td>'+total+'</td></tr>';
-    h+='<tr><td>日志总行数</td><td>'+data.total+'</td></tr></table>';
-    document.getElementById('bot_stats').innerHTML=h;
-}
-
-function load(k){return localStorage.getItem('nsl_'+k)}
-function save(k,v){localStorage.setItem('nsl_'+k,v)}
-
-function ipSortKey(ip){return ip.split('/')[0].split('.').map(n=>n.padStart(3,'0')).join('')}
-
-function ipToNum(ip){const p=ip.split('.').map(Number);return((p[0]<<24)|(p[1]<<16)|(p[2]<<8)|p[3])>>>0}
-
-function parseBlacklist(content){
-    const rules=[];
-    content.split('\\n').forEach(line=>{
-        const key=line.trim().split(/[\\s;]/)[0];
-        if(!key)return;
-        if(key.includes('/')){
-            const idx=key.indexOf('/');
-            const cidr=key.substring(0,idx);
-            const bits=parseInt(key.substring(idx+1));
-            const mask=(~((1<<(32-bits))-1))>>>0;
-            rules.push({type:'cidr',num:ipToNum(cidr),mask:mask});
-        }else{
-            rules.push({type:'single',ip:key});
-        }
-    });
-    return rules;
-}
-
-function isIPBlacklisted(ip,rules){
-    const ipNum=ipToNum(ip);
-    for(const r of rules){
-        if(r.type==='single'){if(ip===r.ip)return true}
-        else{if(((ipNum&r.mask)>>>0)===((r.num&r.mask)>>>0))return true}
-    }
-    return false;
-}
-
-function ipToCIDR(ip,bits){
-    const p=ip.split('.').map(Number);
-    if(bits===24)return p[0]+'.'+p[1]+'.'+p[2]+'.0/24';
-    if(bits===16)return p[0]+'.'+p[1]+'.0.0/16';
-    if(bits===8)return p[0]+'.0.0.0/8';
-    return ip;
-}
-
-function renderIP(data){
-    if(data.error){document.getElementById('ip_stats').innerHTML='<p style="color:red">'+esc(data.error)+'</p>';return}
-    const min=parseInt(document.getElementById('ip_min').value)||0;
-    const unblockedOnly=document.getElementById('unblocked_only').checked;
-    const hideBots=document.getElementById('hide_bots').checked;
-    const blRules=parseBlacklist(document.getElementById('blacklist').value);
-    const filtered=data.filter(x=>{
-        if(x[1]<min)return false;
-        if(unblockedOnly&&isIPBlacklisted(x[0],blRules))return false;
-        if(hideBots&&botIPs[x[0]])return false;
-        return true;
-    });
-    const byIp=document.getElementById('sort_ip').checked;
-    const sorted=filtered.slice().sort((a,b)=>byIp?ipSortKey(a[0]).localeCompare(ipSortKey(b[0])):b[1]-a[1]);
-    if(!sorted.length){document.getElementById('ip_stats').innerHTML='<p>无符合条件的数据</p>';return}
-    let h='<table><tr><th>#</th><th>IP</th><th>访问次数</th><th>封禁<span class="tip">?<span class="tip-text">单IP：仅屏蔽此IP<br>C段：屏蔽 /24 网段（256个IP）<br>B段：屏蔽 /16 网段（65536个IP）<br>A段：屏蔽 /8 网段（约1677万个IP）</span></span></th></tr>';
-    for(let i=0;i<sorted.length;i++){
-        const ip=sorted[i][0];
-        const blocked=isIPBlacklisted(ip,blRules);
-        const botLabel=botIPs[ip];
-        const ipClass=blocked?'ip-blocked':'';
-        const botTag=botLabel?' <span class="bot-tag" title="该IP命中搜索引擎爬虫UA，请谨慎封禁">🔍'+esc(botLabel)+'</span>':'';
-        h+='<tr><td>'+(i+1)+'</td><td class="'+ipClass+'">'+esc(ip)+(blocked?' (已封禁)':'')+botTag+'</td><td>'+sorted[i][1]+'</td>';
-        h+='<td>';
-        h+='<button class="btn btn-block" onclick="addBL(\\''+ip+'\\')" title="屏蔽此单个IP">单IP</button>';
-        h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',24)" title="屏蔽 '+ipToCIDR(ip,24)+'（256个IP）">C段</button>';
-        h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',16)" title="屏蔽 '+ipToCIDR(ip,16)+'（65536个IP）">B段</button>';
-        h+='<button class="btn btn-block" onclick="addBLCIDR(\\''+ip+'\\',8)" title="屏蔽 '+ipToCIDR(ip,8)+'（约1677万个IP）">A段</button>';
-        h+='</td></tr>';
-    }
-    h+='</table>';
-    document.getElementById('ip_stats').innerHTML=h;
-    document.getElementById('ip_summary').textContent='筛选结果: '+sorted.length+' / 总去重IP: '+data.length;
-}
-
-let allIPs=[];
-let botIPs={};
-function loadStats(){
-    const p=new URLSearchParams();
-    if(document.getElementById('today_only').checked)p.set('today','1');
-    if(document.getElementById('success_only').checked)p.set('success','1');
-    const qs=p.toString();
-    fetch('api/stats'+(qs?'?'+qs:'')).then(r=>r.json()).then(d=>{
-        renderBot(d.bots);allIPs=d.ips;botIPs=d.bot_ips||{};renderIP(allIPs);
-    }).catch(e=>{document.getElementById('bot_stats').innerHTML='<p style="color:red">请求失败</p>'});
-}
-
-function adjMin(delta){
-    const el=document.getElementById('ip_min');
-    el.value=Math.max(0,(parseInt(el.value)||0)+delta);
-    save('ip_min',el.value);renderIP(allIPs);
-}
-
-function addBL(ip){
-    const ta=document.getElementById('blacklist');
-    const content=ta.value;
-    const lines=content.split('\\n').map(l=>l.trim().split(/[\\s;]/)[0]).filter(Boolean);
-    if(lines.includes(ip)){alert(ip+' 已在黑名单中');return}
-    const add=ip+' 1;';
-    ta.value=content?content.replace(/\\n+$/,'')+'\\n'+add:add;
-    document.getElementById('msg').textContent='已添加 '+ip+'，请保存';
-    document.getElementById('msg').style.color='green';
-    renderIP(allIPs);
-}
-
-function addBLCIDR(ip,bits){
-    if(bits===8){if(!confirm('A段封禁将屏蔽 '+ipToCIDR(ip,8)+'（约1677万个IP），是否确认？'))return}
-    const cidr=ipToCIDR(ip,bits);
-    const ta=document.getElementById('blacklist');
-    const content=ta.value;
-    const lines=content.split('\\n').map(l=>l.trim().split(/[\\s;]/)[0]).filter(Boolean);
-    if(lines.includes(cidr)){alert(cidr+' 已在黑名单中');return}
-    const add=cidr+' 1;';
-    ta.value=content?content.replace(/\\n+$/,'')+'\\n'+add:add;
-    document.getElementById('msg').textContent='已添加 '+cidr+'，请保存';
-    document.getElementById('msg').style.color='green';
-    renderIP(allIPs);
-}
-
-document.getElementById('ip_min').addEventListener('change',function(){
-    save('ip_min',this.value);renderIP(allIPs);
-});
-document.getElementById('sort_count').addEventListener('change',function(){
-    save('ip_sort','count');renderIP(allIPs);
-});
-document.getElementById('sort_ip').addEventListener('change',function(){
-    save('ip_sort','ip');renderIP(allIPs);
-});
-document.getElementById('today_only').addEventListener('change',function(){
-    save('today_only',this.checked?'1':'0');loadStats();
-});
-document.getElementById('success_only').addEventListener('change',function(){
-    save('success_only',this.checked?'1':'0');loadStats();
-});
-document.getElementById('unblocked_only').addEventListener('change',function(){
-    save('unblocked_only',this.checked?'1':'0');renderIP(allIPs);
-});
-document.getElementById('hide_bots').addEventListener('change',function(){
-    save('hide_bots',this.checked?'1':'0');renderIP(allIPs);
-});
-(function(){
-    const v=load('ip_min');if(v)document.getElementById('ip_min').value=v;
-    const so=load('ip_sort');if(so==='ip'){document.getElementById('sort_ip').checked=true}
-    const t=load('today_only');if(t==='1')document.getElementById('today_only').checked=true;
-    const s=load('success_only');if(s==='1')document.getElementById('success_only').checked=true;
-    const u=load('unblocked_only');if(u==='1')document.getElementById('unblocked_only').checked=true;
-    const hb=load('hide_bots');if(hb==='1')document.getElementById('hide_bots').checked=true;
-})();
-
-function loadBlacklist(){
-    fetch('api/blacklist').then(r=>r.json()).then(d=>{
-        document.getElementById('blacklist').value=d.content||'';
-        document.getElementById('msg').textContent='';
-        if(allIPs.length)renderIP(allIPs);
-    }).catch(e=>{document.getElementById('msg').textContent='加载失败'});
-}
-
-function sortBlacklist(){
-    const ta=document.getElementById('blacklist');
-    const lines=ta.value.split('\\n').filter(l=>l.trim());
-    lines.sort((a,b)=>{
-        const ka=a.trim().split(/[\\s;]/)[0],kb=b.trim().split(/[\\s;]/)[0];
-        return ipSortKey(ka).localeCompare(ipSortKey(kb));
-    });
-    ta.value=lines.join('\\n');
-    document.getElementById('msg').textContent='已按IP排序';
-    document.getElementById('msg').style.color='green';
-    if(allIPs.length)renderIP(allIPs);
-}
-
-function findDupLines(content){
-    const lines=content.split('\\n').filter(l=>l.trim());
-    const seen={}, dups=[];
-    lines.forEach((l,i)=>{
-        const key=l.trim().split(/[\\s;]/)[0];
-        if(!key)return;
-        if(seen[key]!==undefined){dups.push({line:i+1,ip:key,first:seen[key]+1})}
-        else{seen[key]=i}
-    });
-    return dups;
-}
-
-function checkDup(){
-    const dups=findDupLines(document.getElementById('blacklist').value);
-    const msg=document.getElementById('msg');
-    if(!dups.length){msg.textContent='无重复IP';msg.style.color='green'}
-    else{msg.textContent='发现'+dups.length+'个重复: '+dups.map(d=>d.ip+'(第'+d.first+'行与第'+d.line+'行)').join(', ');msg.style.color='red'}
-    return dups;
-}
-
-function saveBlacklist(){
-    const dups=checkDup();
-    if(dups.length){if(!confirm('存在'+dups.length+'个重复IP，仍要保存？'))return}
-    const content=document.getElementById('blacklist').value;
-    document.getElementById('msg').textContent='保存中...';document.getElementById('msg').style.color='#333';
-    fetch('api/blacklist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:content})})
-    .then(r=>r.json()).then(d=>{
-        document.getElementById('msg').textContent=d.ok?'保存成功':'保存失败: '+(d.error||'');
-        document.getElementById('msg').style.color=d.ok?'green':'red';
-    }).catch(e=>{document.getElementById('msg').textContent='保存失败';document.getElementById('msg').style.color='red'});
-}
-
-function nginxTest(){
-    const cm=document.getElementById('cmd_msg');
-    cm.textContent='检查中...';cm.style.color='#333';
-    document.getElementById('btn_reload').disabled=true;
-    fetch('api/nginx_test').then(r=>r.json()).then(d=>{
-        cm.textContent=d.output||'';
-        cm.style.color=d.ok?'green':'red';
-        document.getElementById('btn_reload').disabled=!d.ok;
-    }).catch(e=>{cm.textContent='请求失败';cm.style.color='red'});
-}
-
-function nginxReload(){
-    const cm=document.getElementById('cmd_msg');
-    cm.textContent='重载中...';cm.style.color='#333';
-    fetch('api/nginx_reload').then(r=>r.json()).then(d=>{
-        cm.textContent=d.output||'';
-        cm.style.color=d.ok?'green':'red';
-    }).catch(e=>{cm.textContent='请求失败';cm.style.color='red'});
-}
-
-loadStats();
-loadBlacklist();
-</script>
-</body>
-</html>"""
-
-
+# ========== Core analysis ==========
 def analyze_logs(paths=None, success_only=False):
     if paths is None:
         paths = LOG_PATHS
@@ -372,9 +197,216 @@ def analyze_logs(paths=None, success_only=False):
     return bot_counts, sorted_ips, bot_ips
 
 
-def read_blacklist():
+def _format_network(network):
+    if network.prefixlen == 32:
+        return str(network.network_address)
+    return str(network)
+
+
+def parse_blacklist(content):
+    rules = []
+    invalid = []
+    for line_no, original in enumerate(content.splitlines(), 1):
+        body = original.split("#", 1)[0].strip()
+        if not body:
+            continue
+        parts = body.split()
+        key = parts[0].rstrip(";")
+        if not key or not key[0].isdigit():
+            continue
+        value = parts[1].rstrip(";") if len(parts) > 1 else ""
+        try:
+            network = ipaddress.ip_network(key, strict=False)
+            if network.version != 4:
+                raise ValueError("only IPv4 is supported")
+        except ValueError:
+            invalid.append({"line": line_no, "rule": key})
+            continue
+        if value not in ("0", "1"):
+            continue
+        rules.append({
+            "line": line_no,
+            "rule": key,
+            "network": network,
+            "value": int(value),
+        })
+    return rules, invalid
+
+
+def _effective_blocked_ip_count(rules):
+    root = {"value": None, "children": {}}
+    for rule in rules:
+        network = rule["network"]
+        address = int(network.network_address)
+        node = root
+        for depth in range(network.prefixlen):
+            bit = (address >> (31 - depth)) & 1
+            node = node["children"].setdefault(bit, {"value": None, "children": {}})
+        node["value"] = rule["value"]
+
+    def count(node, depth, inherited):
+        value = inherited if node["value"] is None else node["value"]
+        size = 1 << (32 - depth)
+        if not node["children"]:
+            return size if value == 1 else 0
+        half = size // 2
+        return sum(
+            count(node["children"][bit], depth + 1, value)
+            if bit in node["children"] else (half if value == 1 else 0)
+            for bit in (0, 1)
+        )
+
+    return count(root, 0, 0)
+
+
+def _merge_sibling_networks(networks):
+    sources = {network: {network} for network in networks}
+    changed = True
+    while changed:
+        changed = False
+        for network in sorted(list(sources), key=lambda item: item.prefixlen, reverse=True):
+            if network.prefixlen == 0 or network not in sources:
+                continue
+            parent = network.supernet()
+            children = list(parent.subnets(new_prefix=network.prefixlen))
+            sibling = children[1] if network == children[0] else children[0]
+            if sibling not in sources:
+                continue
+            merged_sources = sources.pop(network) | sources.pop(sibling)
+            if parent in sources:
+                sources[parent] |= merged_sources
+            else:
+                sources[parent] = merged_sources
+            changed = True
+            break
+    return sources
+
+
+def analyze_blacklist(content):
+    rules, invalid = parse_blacklist(content)
+    block_rules = [rule for rule in rules if rule["value"] == 1]
+    networks = [rule["network"] for rule in block_rules]
+    raw_ip_count = sum(network.num_addresses for network in networks)
+    unique_ip_count = _effective_blocked_ip_count(rules)
+
+    prefix_counts = {}
+    for network in networks:
+        prefix_counts[network.prefixlen] = prefix_counts.get(network.prefixlen, 0) + 1
+    prefix_stats = [{
+        "prefix": prefix,
+        "label": "单IP" if prefix == 32 else f"/{prefix}",
+        "rule_count": count,
+        "ip_count": count * (1 << (32 - prefix)),
+    } for prefix, count in sorted(prefix_counts.items())]
+
+    redundant = []
+    seen = {}
+    rules_by_network = {}
+    for rule in rules:
+        rules_by_network.setdefault(rule["network"], rule)
+    for rule in block_rules:
+        network = rule["network"]
+        if network in seen:
+            redundant.append({
+                "line": rule["line"],
+                "rule": rule["rule"],
+                "reason": f"与第{seen[network]['line']}行完全重复",
+            })
+            continue
+        seen[network] = rule
+        container = None
+        for prefix in range(network.prefixlen - 1, -1, -1):
+            candidate = network.supernet(new_prefix=prefix)
+            if candidate in rules_by_network:
+                container = rules_by_network[candidate]
+                break
+        if container:
+            if container["value"] == 1:
+                redundant.append({
+                    "line": rule["line"],
+                    "rule": rule["rule"],
+                    "reason": f"已被第{container['line']}行 {_format_network(container['network'])} 包含",
+                })
+
+    redundant_lines = {item["line"] for item in redundant}
+    essential_rules = [rule for rule in block_rules if rule["line"] not in redundant_lines]
+    essential = {rule["network"] for rule in essential_rules}
+    merged_networks = _merge_sibling_networks(essential)
+    merge_suggestions = []
+    for target, source_set in sorted(
+        merged_networks.items(), key=lambda item: (int(item[0].network_address), item[0].prefixlen)
+    ):
+        sources = sorted(source_set, key=lambda network: (int(network.network_address), network.prefixlen))
+        if len(sources) > 1:
+            merge_suggestions.append({
+                "sources": [_format_network(network) for network in sources],
+                "target": _format_network(target),
+            })
+
+    redundant_by_line = {item["line"]: item["reason"] for item in redundant}
+    merge_sources = {
+        source
+        for suggestion in merge_suggestions
+        for source in suggestion["sources"]
+    }
+    rule_rows = []
+    for rule in rules:
+        network = rule["network"]
+        canonical = _format_network(network)
+        rule_rows.append({
+            "line": rule["line"],
+            "rule": rule["rule"],
+            "canonical": canonical,
+            "value": rule["value"],
+            "prefix": network.prefixlen,
+            "type": "single" if network.prefixlen == 32 else "cidr",
+            "ip_count": network.num_addresses,
+            "redundant": rule["line"] in redundant_by_line,
+            "redundant_reason": redundant_by_line.get(rule["line"], ""),
+            "merge_candidate": canonical in merge_sources,
+        })
+
+    source_lines = content.splitlines()
+    valid_lines = {rule["line"] for rule in block_rules}
+    placements = {}
+    for target, source_set in merged_networks.items():
+        matching_lines = [
+            rule["line"] for rule in essential_rules
+            if rule["network"] in source_set
+        ]
+        if matching_lines:
+            placements[min(matching_lines)] = target
+    optimized_lines = []
+    for line_no, original in enumerate(source_lines, 1):
+        if line_no in placements:
+            optimized_lines.append(f"{_format_network(placements[line_no])} 1;")
+        elif line_no not in valid_lines:
+            optimized_lines.append(original)
+    optimized_content = "\n".join(optimized_lines)
+    if content.endswith(("\n", "\r")):
+        optimized_content += "\n"
+
+    return {
+        "rule_count": len(block_rules),
+        "raw_ip_count": raw_ip_count,
+        "unique_ip_count": unique_ip_count,
+        "prefix_stats": prefix_stats,
+        "rules": rule_rows,
+        "allow_rule_count": sum(rule["value"] == 0 for rule in rules),
+        "redundant": redundant,
+        "merge_suggestions": merge_suggestions,
+        "invalid": invalid,
+        "optimized_content": optimized_content,
+        "changed": optimized_content != content,
+    }
+
+
+def read_list(name):
+    path = LIST_PATHS.get(name)
+    if not path:
+        return None
     try:
-        with open(BLACKLIST_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return ""
@@ -382,13 +414,72 @@ def read_blacklist():
         return None
 
 
-def write_blacklist(content):
+def list_etag(name):
+    path = LIST_PATHS.get(name)
+    if not path:
+        return None
     try:
-        with open(BLACKLIST_PATH, "w", encoding="utf-8") as f:
-            f.write(content)
+        stat = os.stat(path)
+        seed = f"{name}:{stat.st_size}:{stat.st_mtime_ns}".encode("ascii")
+    except FileNotFoundError:
+        seed = f"{name}:missing".encode("ascii")
+    return '"' + hashlib.sha256(seed).hexdigest()[:24] + '"'
+
+
+def write_list(name, content):
+    path = LIST_PATHS.get(name)
+    if not path:
+        return False
+    try:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            delete=False,
+        ) as temp:
+            temp.write(content)
+            temp_path = temp.name
+        os.replace(temp_path, target)
         return True
     except Exception:
+        try:
+            if "temp_path" in locals():
+                os.unlink(temp_path)
+        except OSError:
+            pass
         return False
+
+
+def read_blacklist():
+    return read_list("black")
+
+
+def write_blacklist(content):
+    return write_list("black", content)
+
+
+def log_manifest():
+    result = []
+    for index, path in enumerate(LOG_PATHS):
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            continue
+        identity = hashlib.sha256(
+            f"{path}:{stat.st_dev}:{stat.st_ino}".encode("utf-8")
+        ).hexdigest()[:24]
+        result.append({
+            "index": index,
+            "id": identity,
+            "name": os.path.basename(path),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "gzip": path.lower().endswith(".gz"),
+        })
+    return result
 
 
 def run_cmd(cmd):
@@ -405,29 +496,67 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML.encode("utf-8"))
-        elif self.path.startswith("/api/stats"):
-            qs = self.path.split("?", 1)[-1] if "?" in self.path else ""
-            today = "today=1" in qs
-            success = "success=1" in qs
+        parsed = urlsplit(self.path)
+        path = normalize_app_path(parsed.path)
+        query = parse_qs(parsed.query)
+        if path == "/":
+            self._static("index.html")
+        elif path in DLC_ROUTES:
+            _, target = DLC_ROUTES[path]
+            self._serve_file(target)
+        elif path.startswith("/static/"):
+            self._static(path.removeprefix("/static/"))
+        elif path.startswith("/dlc/"):
+            self._dlc_static(path)
+        elif path == "/api/dlc":
+            self._json({
+                "plugins": [
+                    {
+                        "id": plugin["id"],
+                        "name": plugin["name"],
+                        "version": plugin["version"],
+                        "nav": plugin["nav"],
+                    }
+                    for plugin in DLC_PLUGINS
+                ]
+            })
+        elif path == "/api/logs/manifest":
+            self._json({"files": log_manifest()})
+        elif path == "/api/logs/chunk":
+            self._log_chunk(query)
+        elif path == "/api/stats":
+            # Backwards-compatible endpoint. The new UI uses raw chunks and
+            # computes aggregates in the browser.
+            today = query.get("today") == ["1"]
+            success = query.get("success") == ["1"]
             paths = [LOG_PATHS[0]] if today else LOG_PATHS
             bot_counts, sorted_ips, bot_ips = analyze_logs(paths, success_only=success)
             data = {"bots": bot_counts, "ips": sorted_ips, "bot_ips": bot_ips}
             self._json(data)
-        elif self.path == "/api/blacklist":
-            content = read_blacklist()
+        elif path in ("/api/config", "/api/blacklist"):
+            name = "black" if path == "/api/blacklist" else query.get("name", [""])[0]
+            if name not in LIST_PATHS:
+                self._json({"error": "未知名单"}, 400)
+                return
+            etag = list_etag(name)
+            if etag and self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
+            content = read_list(name)
             if content is None:
                 self._json({"error": "读取失败"}, 500)
             else:
-                self._json({"content": content})
-        elif self.path == "/api/nginx_test":
+                self._json(
+                    {"name": name, "content": content, "etag": etag},
+                    extra_headers={"ETag": etag, "Cache-Control": "no-cache"},
+                )
+        elif path == "/api/nginx_test":
             ok, output = run_cmd("nginx -t 2>&1")
             self._json({"ok": ok, "output": output})
-        elif self.path == "/api/nginx_reload":
+        elif path == "/api/nginx_reload":
             ok, output = run_cmd("nginx -s reload 2>&1")
             self._json({"ok": ok, "output": output})
         else:
@@ -435,7 +564,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        if self.path == "/api/blacklist":
+        parsed = urlsplit(self.path)
+        path = normalize_app_path(parsed.path)
+        query = parse_qs(parsed.query)
+        if path in ("/api/config", "/api/blacklist", "/api/blacklist/analyze"):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             try:
@@ -444,22 +576,132 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._json({"error": "无效请求"}, 400)
                 return
-            if write_blacklist(content):
-                self._json({"ok": True})
+            if path == "/api/blacklist/analyze":
+                self._json(analyze_blacklist(content))
             else:
-                self._json({"error": "写入失败"}, 500)
+                name = (
+                    "black"
+                    if path == "/api/blacklist"
+                    else query.get("name", [""])[0]
+                )
+                if name not in LIST_PATHS:
+                    self._json({"error": "未知名单"}, 400)
+                elif write_list(name, content):
+                    self._json({"ok": True, "etag": list_etag(name)})
+                else:
+                    self._json({"error": "写入失败"}, 500)
         else:
             self.send_response(404)
             self.end_headers()
 
-    def _json(self, data, code=200):
+    def _static(self, relative):
+        target = _safe_child(WEB_ROOT, relative)
+        if target is None:
+            self.send_response(403)
+            self.end_headers()
+            return
+        self._serve_file(target)
+
+    def _dlc_static(self, path):
+        parts = path.removeprefix("/dlc/").split("/", 1)
+        if len(parts) != 2:
+            self.send_response(404)
+            self.end_headers()
+            return
+        plugin = next(
+            (item for item in DLC_PLUGINS if item["id"] == parts[0]),
+            None,
+        )
+        target = _safe_child(plugin["root"], parts[1]) if plugin else None
+        if target is None:
+            self.send_response(403 if plugin else 404)
+            self.end_headers()
+            return
+        self._serve_file(target)
+
+    def _serve_file(self, target):
+        if not target.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+        content = target.read_bytes()
+        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if mime.startswith("text/") or mime in ("application/javascript", "application/json"):
+            mime += "; charset=utf-8"
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _log_chunk(self, query):
+        try:
+            index = int(query.get("index", ["-1"])[0])
+            offset = max(0, int(query.get("offset", ["0"])[0]))
+        except ValueError:
+            self._json({"error": "无效参数"}, 400)
+            return
+        if index < 0 or index >= len(LOG_PATHS):
+            self._json({"error": "日志不存在"}, 404)
+            return
+        path = LOG_PATHS[index]
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            self._json({"error": "日志不存在"}, 404)
+            return
+        identity = hashlib.sha256(
+            f"{path}:{stat.st_dev}:{stat.st_ino}".encode("utf-8")
+        ).hexdigest()[:24]
+        expected = query.get("id", [identity])[0]
+        if expected != identity:
+            self._json({"error": "日志已轮转，请刷新清单"}, 409)
+            return
+        if offset > stat.st_size:
+            self._json({"error": "偏移量超过文件大小，请重建浏览器缓存"}, 416)
+            return
+        compressed = path.lower().endswith(".gz")
+        if compressed and offset not in (0, stat.st_size):
+            self._json({"error": "压缩日志只能整文件读取"}, 416)
+            return
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(offset)
+                data = fh.read() if compressed else fh.read(LOG_CHUNK_SIZE)
+                if not compressed and data and offset + len(data) < stat.st_size:
+                    data += fh.readline()
+                next_offset = offset + len(data)
+        except OSError as exc:
+            self._json({"error": str(exc)}, 500)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Log-Id", identity)
+        self.send_header("X-Next-Offset", str(next_offset))
+        self.send_header("X-File-Size", str(stat.st_size))
+        self.send_header("Cache-Control", "no-store")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _json(self, data, code=200, extra_headers=None):
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        for key, value in (extra_headers or {}).items():
+            if value is not None:
+                self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        self.wfile.write(payload)
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Server started at: http://0.0.0.0:{PORT}")
+    if DLC_PLUGINS:
+        print("DLC enabled: " + ", ".join(item["id"] for item in DLC_PLUGINS))
     server.serve_forever()

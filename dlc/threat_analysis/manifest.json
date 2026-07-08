@@ -1,0 +1,7 @@
+{
+  "id": "threat_analysis",
+  "name": "离线威胁与区域分析",
+  "version": "1.0.0",
+  "enabled_by_default": true,
+  "routes": {}
+}

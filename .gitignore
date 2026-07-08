@@ -1,0 +1,61 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime data: logs, real policies, databases, reports and caches
+/var/*
+!/var/.gitkeep
+
+# Local-only directories
+/tmp/
+/tests/
+/docs/
+/local/
+/private/
+
+# Legacy locations retained here so old deployments cannot leak data
+/log/
+/analysis_data/
+/analysis_output/
+/black_ip.conf
+/trusted_ip.conf
+/analysis_allowlist.txt
+/nginx.conf
+
+# Common generated analysis artifacts
+*.log
+*.pid
+*.bak
+*.tmp
+*.sqlite
+*.sqlite3
+*.db
+*.mmdb
+dbip-*.csv
+dbip-*.csv.gz
+ptr_cache.json
+candidate_*.conf
+*_review_only.conf

@@ -1,0 +1,226 @@
+{
+  "as_of": "2026-07-04",
+  "methodology_note": "外部排名只用于建立候选池；来源地通常是僵尸节点、代理、VPN或托管服务器，不代表攻击者本人所在地，也不能单独触发封国。",
+  "sources": {
+    "spamhaus_h2_2025": {
+      "title": "Spamhaus Botnet Threat Update Jul-Dec 2025",
+      "url": "https://content.spamhaus.org/30bc0262-14ee-42d9-93bb-31985ef89497.pdf"
+    },
+    "cloudflare_q2_2025": {
+      "title": "Cloudflare 2025 Q2 DDoS Threat Report",
+      "url": "https://blog.cloudflare.com/ddos-threat-report-for-2025-q2/"
+    },
+    "cloudflare_q3_2025": {
+      "title": "Cloudflare 2025 Q3 DDoS Threat Report",
+      "url": "https://blog.cloudflare.com/ddos-threat-report-2025-q3/"
+    },
+    "dbip_lite": {
+      "title": "DB-IP Lite July 2026",
+      "url": "https://db-ip.com/db/lite.php"
+    },
+    "ipdeny": {
+      "title": "IPdeny country CIDR zones",
+      "url": "https://www.ipdeny.com/ipblocks/"
+    }
+  },
+  "countries": {
+    "SC": {
+      "name_zh": "塞舌尔",
+      "audience_relevance": "极低",
+      "spamhaus_rank": 8,
+      "spamhaus_c2": 647,
+      "spamhaus_change": "+287%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus 2025下半年僵尸网络C&C位置第8，半年增长287%。"
+    },
+    "NL": {
+      "name_zh": "荷兰",
+      "audience_relevance": "低，但托管/云和搜索基础设施很多",
+      "spamhaus_rank": 3,
+      "spamhaus_c2": 2104,
+      "spamhaus_change": "+50%",
+      "cloudflare_rank": 9,
+      "external_summary": "Spamhaus C&C位置第3；Cloudflare 2025Q2 DDoS来源第9。"
+    },
+    "DE": {
+      "name_zh": "德国",
+      "audience_relevance": "中，华人和云服务较多",
+      "spamhaus_rank": 4,
+      "spamhaus_c2": 1528,
+      "spamhaus_change": "+17%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第4；Hetzner和Contabo持续出现在滥用网络排名。"
+    },
+    "SG": {
+      "name_zh": "新加坡",
+      "audience_relevance": "中，中文用户和亚洲云出口存在",
+      "spamhaus_rank": 5,
+      "spamhaus_c2": 1191,
+      "spamhaus_change": "+67%",
+      "cloudflare_rank": 2,
+      "external_summary": "Spamhaus C&C位置第5；Cloudflare 2025Q2 DDoS来源第2。"
+    },
+    "RU": {
+      "name_zh": "俄罗斯",
+      "audience_relevance": "极低",
+      "spamhaus_rank": 6,
+      "spamhaus_c2": 722,
+      "spamhaus_change": "-29%",
+      "cloudflare_rank": 6,
+      "external_summary": "Spamhaus C&C位置第6；Cloudflare 2025Q2 DDoS来源第6；.ru恶意C&C域名显著增长。"
+    },
+    "GB": {
+      "name_zh": "英国",
+      "audience_relevance": "中，华人和云/AI服务较多",
+      "spamhaus_rank": 7,
+      "spamhaus_c2": 667,
+      "spamhaus_change": "+103%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第7，但英国正常用户和云服务规模也很大。"
+    },
+    "SE": {
+      "name_zh": "瑞典",
+      "audience_relevance": "低",
+      "spamhaus_rank": 10,
+      "spamhaus_c2": 437,
+      "spamhaus_change": "+54%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第10，半年增长54%。"
+    },
+    "VN": {
+      "name_zh": "越南",
+      "audience_relevance": "中，邻近中文市场",
+      "spamhaus_rank": 11,
+      "spamhaus_c2": 321,
+      "spamhaus_change": "+71%",
+      "cloudflare_rank": 8,
+      "external_summary": "Spamhaus C&C位置第11；Cloudflare 2025Q2 DDoS来源第8。"
+    },
+    "MX": {
+      "name_zh": "墨西哥",
+      "audience_relevance": "极低",
+      "spamhaus_rank": 12,
+      "spamhaus_c2": 292,
+      "spamhaus_change": "+16%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第12。"
+    },
+    "TR": {
+      "name_zh": "土耳其",
+      "audience_relevance": "低",
+      "spamhaus_rank": 13,
+      "spamhaus_c2": 271,
+      "spamhaus_change": "+86%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第13，半年增长86%。"
+    },
+    "PL": {
+      "name_zh": "波兰",
+      "audience_relevance": "低",
+      "spamhaus_rank": 15,
+      "spamhaus_c2": 222,
+      "spamhaus_change": "新上榜",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第15，新进入前20。"
+    },
+    "CO": {
+      "name_zh": "哥伦比亚",
+      "audience_relevance": "极低",
+      "spamhaus_rank": 18,
+      "spamhaus_c2": 187,
+      "spamhaus_change": "新上榜",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第18，新进入前20。"
+    },
+    "BR": {
+      "name_zh": "巴西",
+      "audience_relevance": "极低",
+      "spamhaus_rank": 19,
+      "spamhaus_c2": 173,
+      "spamhaus_change": "+12%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第19；本站近期请求量较高。"
+    },
+    "BG": {
+      "name_zh": "保加利亚",
+      "audience_relevance": "极低",
+      "spamhaus_rank": 20,
+      "spamhaus_c2": 170,
+      "spamhaus_change": "-48%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第20，但趋势下降。"
+    },
+    "FI": {
+      "name_zh": "芬兰",
+      "audience_relevance": "低",
+      "spamhaus_rank": 17,
+      "spamhaus_c2": 197,
+      "spamhaus_change": "+8%",
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus C&C位置第17。"
+    },
+    "ID": {
+      "name_zh": "印度尼西亚",
+      "audience_relevance": "低到中，东南亚中文用户可能存在",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": 1,
+      "external_summary": "Cloudflare 2025Q2、Q3均列为最大DDoS来源；从2024Q3起连续一年排名第一。"
+    },
+    "AR": {
+      "name_zh": "阿根廷",
+      "audience_relevance": "极低",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": 4,
+      "external_summary": "Cloudflare 2025Q2 DDoS来源第4。"
+    },
+    "UA": {
+      "name_zh": "乌克兰",
+      "audience_relevance": "低",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": 5,
+      "external_summary": "Cloudflare 2025Q2 DDoS来源第5。"
+    },
+    "EC": {
+      "name_zh": "厄瓜多尔",
+      "audience_relevance": "极低",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": 7,
+      "external_summary": "Cloudflare 2025Q2 DDoS来源第7。"
+    },
+    "TH": {
+      "name_zh": "泰国",
+      "audience_relevance": "中，中国游客和中文用户可能存在",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": 10,
+      "external_summary": "Cloudflare 2025Q2 DDoS来源第10。"
+    },
+    "LT": {
+      "name_zh": "立陶宛",
+      "audience_relevance": "极低",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus报告中立陶宛注册商Hostinger相关新C&C域名增长328%；本站样本攻击集中度高。"
+    },
+    "RO": {
+      "name_zh": "罗马尼亚",
+      "audience_relevance": "低",
+      "spamhaus_rank": null,
+      "spamhaus_c2": null,
+      "spamhaus_change": null,
+      "cloudflare_rank": null,
+      "external_summary": "Spamhaus新C&C网络排名中M247位列第8；更适合按ASN而不是整国处理。"
+    }
+  }
+}

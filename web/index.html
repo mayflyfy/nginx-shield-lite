@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nginx Shield Lite</title>
+<link rel="stylesheet" href="static/styles.css?v=20260707-1">
+</head>
+<body>
+<header>
+  <div class="brand">Nginx Shield Lite <small>浏览器计算版</small></div>
+  <nav data-nsl-nav><a class="active" href="./">访问分析</a></nav>
+  <label class="api-setting">Nginx代理/API地址
+    <input id="api_base" placeholder="留空=当前地址；例 /shield">
+  </label>
+</header>
+<main>
+<div id="log_progress" class="panel" style="display:none">
+  <div class="panel-body"><div id="log_progress_text">正在读取日志…</div><div class="progress"><i id="log_progress_bar"></i></div></div>
+</div>
+<div class="grid">
+  <section>
+    <div class="panel">
+      <div class="panel-head"><h2>日志访问统计</h2><span class="muted">原始日志由浏览器增量解析并缓存</span><span class="spacer"></span><button id="refresh_logs">刷新</button></div>
+      <div class="panel-body">
+        <div class="toolbar">
+          <label>日志文件
+            <select id="log_file"><option value="all">全部日志</option></select>
+          </label>
+          <label>状态
+            <select id="status_scope">
+              <option value="all">全部状态</option>
+              <option value="200">200</option>
+              <option value="404">404</option>
+              <option value="444">444</option>
+              <option value="not444">!=444</option>
+              <option value="lt400">&lt;400</option>
+              <option value="gte400">&gt;=400</option>
+            </select>
+          </label>
+          <label>最少访问 <input id="ip_min" type="number" min="0" value="5" class="number-input"></label>
+          <label>名单
+            <select id="ip_scope">
+              <option value="all">全部</option>
+              <option value="blacklisted">黑名单</option>
+              <option value="allowlisted">白名单</option>
+            </select>
+          </label>
+          <label>来源
+            <select id="source_scope">
+              <option value="all">全部来源</option>
+              <option value="search">搜索引擎来源</option>
+              <option value="user">用户来源</option>
+              <option value="unknown">未标识来源</option>
+              <option value="none">无来源</option>
+            </select>
+          </label>
+          <label><input id="hide_bots" type="checkbox"> 隐藏已识别爬虫</label>
+        </div>
+        <div id="bot_stats" class="cards compact-cards"></div>
+        <div class="toolbar" style="margin-top:12px">
+          <strong>IP 明细</strong><span id="ip_summary" class="muted"></span><span class="spacer"></span>
+          <select id="ip_sort"><option value="count">按访问量</option><option value="ip">按IP</option></select>
+          <label>每页
+            <select id="ip_page_size"><option>100</option><option>1000</option><option>10000</option></select>
+          </label>
+          <button id="ip_export">导出 CSV</button>
+          <button id="ip_expand">展开列表</button>
+        </div>
+        <div id="ip_scroll" class="scroll"><table><thead><tr><th>#</th><th>IP</th><th>次数</th><th>操作</th></tr></thead><tbody id="ip_rows"></tbody></table></div>
+        <div id="ip_pager" class="pagination"></div>
+      </div>
+    </div>
+  </section>
+  <aside>
+    <div class="panel">
+      <div class="panel-head">
+        <div class="tabs"><button class="tab active" data-list="black">黑名单</button><button class="tab" data-list="trusted">白名单</button></div>
+        <span id="list_path" class="path">/etc/nginx/conf.d/black_ip.conf</span>
+        <span class="spacer"></span><span id="dirty_state" class="status ok">已同步</span>
+      </div>
+      <div class="panel-body">
+        <div id="list_summary" class="cards"></div>
+        <div class="toolbar" style="margin-top:10px">
+          <input id="new_rule" placeholder="IP 或 CIDR（IPv4 最细 /24）" style="flex:1">
+          <button id="add_rule">添加</button>
+          <input id="rule_search" placeholder="筛选规则" style="width:130px">
+          <label>每页
+            <select id="rule_page_size"><option>100</option><option>1000</option><option>10000</option></select>
+          </label>
+          <button id="list_export">导出名单</button>
+          <button id="rule_expand">展开列表</button>
+        </div>
+        <div id="list_issues" class="warn"></div>
+        <div id="rule_scroll" class="scroll"><table><thead><tr><th>规则</th><th>覆盖IP</th><th></th></tr></thead><tbody id="rule_rows"></tbody></table></div>
+        <div id="rule_pager" class="pagination"></div>
+        <div class="toolbar" style="margin-top:10px"><span id="list_msg" class="status"></span><span class="spacer"></span><button id="undo_list">撤销</button><button id="save_list" class="primary">保存</button></div>
+        <details><summary>高级：编辑原始配置</summary><textarea id="list_content" spellcheck="false"></textarea></details>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Nginx 操作</h2></div>
+      <div class="panel-body"><div class="toolbar"><button id="nginx_test">检查配置</button><button id="nginx_reload" disabled>重载 Nginx</button></div><pre id="nginx_msg"></pre></div>
+    </div>
+  </aside>
+</div>
+</main>
+<script src="static/common.js?v=20260707-1"></script>
+<script src="static/app.js?v=20260707-1"></script>
+</body>
+</html>
